@@ -21,14 +21,19 @@ impl Socks5{
     }
     pub fn serve(&mut self){
         //1. 握手
+        println!("2  握手");
         self.hand_shake();
+
         //2. 验证
 
         //3.获取地址转发数据
+        println!("3 准备转发");
         self.ready_serve();
 
         //4.关闭
         self.stream.shutdown(Shutdown::Both);
+        println!("9 双向流关闭");
+
     }
 
 
@@ -95,6 +100,7 @@ impl Socks5{
         self.stream.read(&mut buf);
         let ver = buf[0];
         if ver!=VERSION {
+            println!("socks版本不对，结束");
             return;
         }
         self.stream.read(&mut buf);
@@ -181,6 +187,7 @@ impl Socks5{
             0x10]);
 
         //开始转发
+        println!("4  获取到地址开始转发");
         match atyp {
             0x1=>{
                 let ip = Ipv4Addr::new(buf[0],buf[1],buf[2],buf[3]);
@@ -193,39 +200,56 @@ impl Socks5{
                 //一个线程从客户端读取写入服务端
                 //主线程将响应数据写回客户端
                 std::thread::spawn(move||{
+                    println!("5 读取C端数据写向S");
                    let mut client_buf = [0u8;4096];
                     loop {
                         match client.read(&mut client_buf) {
                             Ok(n)=>{
+                                if n==0 {
+                                    println!("C端写向S完成0 break");
+                                    break;
+                                }
                                 remote_copy.write(&mut client_buf[0..n]);
                             }
                             Err(err)=>{
-                               println!("{:?}",err);
-                                return;
+                                println!("{:?}",err);
+                                break;
                             }
                         }
                     }
+                    println!("6 C->S lopp结束");
                 });
 
                 let mut server_buf = [0u8;4096];
+                println!("7 S->C 开始");
                 loop {
                     match remote.read(&mut server_buf) {
                         Ok(n)=>{
+                            if n==0 {
+                                println!("7.1 读取到0");
+                                break;
+                            }
                             self.stream.write(&mut server_buf[..n]);
                         }
                         Err(err)=>{
                             println!("{:?}",err);
+                            break;
                         }
                     }
                 }
+                println!("8 S->C loop结束");
             }
 
-            0x3=>{}
-            0x4=>{}
+            0x3=>{
+                println!("0x3,{}",String::from_utf8_lossy(&buf[..addr_len]));
+                println!("暂不支持域名转发");
+            }
+            0x4=>{
+                println!("0x4,{}",String::from_utf8_lossy(&buf[..addr_len]));
+                println!("暂不支持ipv6转发");
+            }
             _=>{}
         }
-
-
     }
 
     //转发
