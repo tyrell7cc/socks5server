@@ -1,6 +1,6 @@
-use std::net::{TcpStream, Ipv4Addr, SocketAddrV4, Shutdown};
+use std::net::{TcpStream, Ipv4Addr, SocketAddrV4, Shutdown, SocketAddrV6, Ipv6Addr};
 use std::io::{Read, Error, Write};
-use std::convert::TryInto;
+// use std::convert::TryInto;
 
 const VERSION:u8=0x05;
 const CONNECT: u8 = 0x01;
@@ -126,7 +126,7 @@ impl Socks5{
                 4 as usize
             }
             0x3=>{
-                //domainname的话值的第一个字节代表域名长度
+                //domainname的话值的第一个字节代表域名长度->往后走一个字节
                 self.stream.read(&mut buf);
                 buf[0] as usize
             }
@@ -139,7 +139,7 @@ impl Socks5{
                 return;
             }
         };
-        //读取ip
+        //读取地址
         let mut buf=[0u8;260];
         let _=self.stream.read_exact(&mut buf[0..addr_len]);
 
@@ -194,63 +194,80 @@ impl Socks5{
                 println!("IP is {}:",ip);
                 let addr = SocketAddrV4::new(ip,port);
                 let mut remote = TcpStream::connect(addr).unwrap();
-                let mut remote_copy = remote.try_clone().unwrap();
-                let mut client = self.stream.try_clone().unwrap();
-
-                //一个线程从客户端读取写入服务端
-                //主线程将响应数据写回客户端
-                std::thread::spawn(move||{
-                    println!("5 读取C端数据写向S");
-                   let mut client_buf = [0u8;4096];
-                    loop {
-                        match client.read(&mut client_buf) {
-                            Ok(n)=>{
-                                if n==0 {
-                                    println!("C端写向S完成0 break");
-                                    break;
-                                }
-                                remote_copy.write(&mut client_buf[0..n]);
-                            }
-                            Err(err)=>{
-                                println!("{:?}",err);
-                                break;
-                            }
-                        }
-                    }
-                    println!("6 C->S lopp结束");
-                });
-
-                let mut server_buf = [0u8;4096];
-                println!("7 S->C 开始");
-                loop {
-                    match remote.read(&mut server_buf) {
-                        Ok(n)=>{
-                            if n==0 {
-                                println!("7.1 读取到0");
-                                break;
-                            }
-                            self.stream.write(&mut server_buf[..n]);
-                        }
-                        Err(err)=>{
-                            println!("{:?}",err);
-                            break;
-                        }
-                    }
-                }
-                println!("8 S->C loop结束");
+                self.forward(remote);
             }
 
             0x3=>{
-                println!("0x3,{}",String::from_utf8_lossy(&buf[..addr_len]));
-                println!("暂不支持域名转发");
+                println!("domain name is:,{}",String::from_utf8_lossy(&buf[..addr_len]));
+                let addr = String::new()+String::from_utf8_lossy(&buf[..addr_len]).trim()+":"+port.to_string().as_str();
+                let mut remote = TcpStream::connect(addr.as_str()).unwrap();
+                self.forward(remote);
             }
             0x4=>{
-                println!("0x4,{}",String::from_utf8_lossy(&buf[..addr_len]));
-                println!("暂不支持ipv6转发");
+
+                let a = SocketAddrV6::new(Ipv6Addr::new(
+                    (buf[0] as u16 )<< 8|buf[1] as u16,
+                    (buf[2] as u16 )<< 8|buf[3] as u16,
+                    (buf[4] as u16 )<< 8|buf[5] as u16,
+                    (buf[6] as u16 )<< 8|buf[7] as u16,
+                    (buf[8] as u16 )<< 8|buf[9] as u16,
+                    (buf[10] as u16 )<< 8|buf[11] as u16,
+                    (buf[12] as u16 )<< 8|buf[13] as u16,
+                    (buf[14] as u16 )<< 8|buf[15] as u16
+                ),port,0,0);
+                println!("0x4,{}",a.ip().to_string());
+                let mut remote = TcpStream::connect(a).unwrap();
+                self.forward(remote);
             }
             _=>{}
         }
     }
 
+    fn forward(&mut self, mut remote:TcpStream){
+        let mut remote_copy = remote.try_clone().unwrap();
+        let mut client = self.stream.try_clone().unwrap();
+
+        //一个线程从客户端读取写入服务端
+        //主线程将响应数据写回客户端
+        std::thread::spawn(move||{
+            println!("5 读取C端数据写向S");
+            let mut client_buf = [0u8;4096];
+            loop {
+                match client.read(&mut client_buf) {
+                    Ok(n)=>{
+                        if n==0 {
+                            println!("C端写向S完成0 break");
+                            break;
+                        }
+                        remote_copy.write(&mut client_buf[0..n]);
+                    }
+                    Err(err)=>{
+                        println!("{:?}",err);
+                        break;
+                    }
+                }
+            }
+            println!("6 C->S lopp结束");
+        });
+
+        let mut server_buf = [0u8;4096];
+        println!("7 S->C 开始");
+        loop {
+            match remote.read(&mut server_buf) {
+                Ok(n)=>{
+                    if n==0 {
+                        println!("7.1 读取到0");
+                        break;
+                    }
+                    self.stream.write(&mut server_buf[..n]);
+                }
+                Err(err)=>{
+                    println!("{:?}",err);
+                    break;
+                }
+            }
+        }
+        println!("8 S->C loop结束");
+    }
     //转发
 }
